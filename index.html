@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Voice Cycle</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #000; color: #fff; font: 17px/1.35 "Times New Roman", Times, serif; height: 100%; }
+  body { display: flex; flex-direction: column; min-height: 100vh; padding: 16px; gap: 14px; }
+  button { font: inherit; font-size: 22px; background: #fff; color: #000; border: 1px solid #fff; padding: 16px; cursor: pointer; width: 100%; }
+  button.on { background: #73f28f; border-color: #73f28f; }
+  button:disabled { opacity: .35; }
+  #stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #fff; padding: 20px; text-align: center; gap: 10px; }
+  #voice { font-size: 48px; color: #73f28f; letter-spacing: .04em; }
+  #next { color: #0000EE; background: #fff; padding: 2px 10px; }
+  #bar { width: 100%; height: 6px; background: #000; border: 1px solid #fff; position: relative; }
+  #barfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #0000EE; }
+  #level { width: 100%; height: 6px; border: 1px solid #fff; position: relative; }
+  #levelfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #73f28f; }
+  #status { color: #0000EE; background: #fff; padding: 2px 8px; align-self: flex-start; }
+  #status.err { background: #73f28f; color: #000; }
+  details { border: 1px solid #fff; padding: 10px; }
+  summary { cursor: pointer; color: #73f28f; }
+  label.ctl { display: grid; grid-template-columns: 110px 1fr 64px; gap: 10px; align-items: center; padding: 5px 0; }
+  label.ctl .v { text-align: right; color: #73f28f; }
+  label.chk { display: flex; gap: 8px; align-items: center; padding: 5px 0; }
+  select { font: inherit; background: #000; color: #fff; border: 1px solid #fff; padding: 6px; width: 100%; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 24px; background: transparent; }
+  input[type=range]::-webkit-slider-runnable-track { height: 1px; background: #fff; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 22px; background: #73f28f; margin-top: -10.5px; }
+  input[type=checkbox] { accent-color: #0000EE; width: 20px; height: 20px; }
+  ol { padding-left: 20px; } li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<button id="start">Start</button>
+<div id="stage">
+  <div id="voice">—</div>
+  <div id="next">press start</div>
+  <div id="bar"><div id="barfill"></div></div>
+  <div id="level"><div id="levelfill"></div></div>
+</div>
+<div id="status">idle</div>
+
+<details>
+  <summary>settings</summary>
+  <label class="ctl"><span>change every</span><input type="range" id="interval" min="10" max="120" step="5" value="30"><span class="v" id="intervalV">30 s</span></label>
+  <label class="ctl"><span>morph over</span><input type="range" id="morph" min="2" max="20" step="1" value="8"><span class="v" id="morphV">8 s</span></label>
+  <label class="ctl"><span>output gain</span><input type="range" id="gain" min="0" max="3" step="0.05" value="1"><span class="v" id="gainV">1.00</span></label>
+  <label class="ctl"><span>gate</span><input type="range" id="gate" min="0" max="0.2" step="0.005" value="0.03"><span class="v" id="gateV">0.030</span></label>
+  <label class="chk"><input type="checkbox" id="aec" checked> browser echo cancel + noise suppression (keep on for the phone rig)</label>
+  <label class="chk"><input type="checkbox" id="shuffle" checked> shuffle the order</label>
+  <label class="ctl" style="grid-template-columns:110px 1fr"><span>mic</span><select id="inDev"><option value="">default</option></select></label>
+  <label class="ctl" style="grid-template-columns:110px 1fr"><span>output</span><select id="outDev"><option value="">default</option></select></label>
+</details>
+
+<details>
+  <summary>how to use it</summary>
+  <ol>
+    <li>Open this page over https (host it on your site, or on any static host). Browsers refuse the microphone on plain http or on a file opened from the phone's storage.</li>
+    <li>Tap Start, allow the mic. Your voice comes out of the device's speaker, changed, and glides to a new voice on the interval.</li>
+    <li>Phone rig: point the phone's speaker at the laptop mic and keep the phone's own mic (bottom edge) turned away from its speaker; lower output gain if it starts to howl. The gate mutes the output when you're not talking, which breaks the feedback loop between words.</li>
+    <li>Laptop rig (cleaner): run this on the Mac with headphones on, pick BlackHole as the output, and set the call app's mic to BlackHole.</li>
+  </ol>
+</details>
+
+<script>
+// ---------- the voices: all meant to read as a person ----------
+const VOICES = [
+  { name: 'neutral', pitch: 0,  hp: 60,  lp: 14000, bodyHz: 400,  bodyDb: 0, drive: 0 },
+  { name: 'low',     pitch: -4, hp: 60,  lp: 6500,  bodyHz: 160,  bodyDb: 6, drive: 0.04 },
+  { name: 'nasal',   pitch: 2,  hp: 200, lp: 9000,  bodyHz: 1500, bodyDb: 7, drive: 0 },
+  { name: 'small',   pitch: 6,  hp: 250, lp: 11000, bodyHz: 2600, bodyDb: 4, drive: 0 },
+  { name: 'warm',    pitch: -2, hp: 50,  lp: 8000,  bodyHz: 300,  bodyDb: 5, drive: 0.02 },
+  { name: 'thin',    pitch: 4,  hp: 400, lp: 7000,  bodyHz: 3000, bodyDb: 3, drive: 0 },
+  { name: 'boom',    pitch: -6, hp: 50,  lp: 5000,  bodyHz: 120,  bodyDb: 7, drive: 0.06 },
+  { name: 'bright',  pitch: 3,  hp: 150, lp: 12000, bodyHz: 2200, bodyDb: 5, drive: 0 },
+];
+
+// ---------- pitch shifter (granular, same engine as before), with a slewed pitch so changes glide ----------
+class VoiceDSP {
+  constructor() { this.size = 16384; this.buf = new Float32Array(this.size); this.w = 0; this.N = 2048; this.phase = 0; this.cur = 0; }
+  rd(pos) { pos = ((pos % this.size) + this.size) % this.size; const i = Math.floor(pos), f = pos - i; const a = this.buf[i], b = this.buf[(i + 1) % this.size]; return a + (b - a) * f; }
+  run(inp, out, target, rate, sr) {
+    const N = this.N;
+    // glide toward the target pitch at `rate` semitones per second, so a morph never jumps
+    const step = rate / sr * 128;
+    for (let i = 0; i < inp.length; i++) {
+      if ((i & 127) === 0) { if (this.cur < target) this.cur = Math.min(target, this.cur + step); else if (this.cur > target) this.cur = Math.max(target, this.cur - step); }
+      this.buf[this.w] = inp[i];
+      let s;
+      if (Math.abs(this.cur) > 0.02) {
+        const ratio = Math.pow(2, this.cur / 12);
+        const d1 = this.phase, d2 = (d1 + N / 2) % N;
+        const g1 = 1 - Math.abs(2 * d1 / N - 1), g2 = 1 - Math.abs(2 * d2 / N - 1);
+        s = this.rd(this.w - d1) * g1 + this.rd(this.w - d2) * g2;
+        this.phase = (((this.phase + (1 - ratio)) % N) + N) % N;
+      } else { s = inp[i]; this.phase = 0; }
+      out[i] = s; this.w = (this.w + 1) % this.size;
+    }
+  }
+}
+const workletSrc = VoiceDSP.toString() + `
+class P extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: 'pitch', defaultValue: 0, minValue: -24, maxValue: 24 }, { name: 'rate', defaultValue: 1, minValue: 0.05, maxValue: 50 }]; }
+  constructor() { super(); this.dsp = new VoiceDSP(); }
+  process(inputs, outputs, p) { const i = inputs[0] && inputs[0][0], o = outputs[0] && outputs[0][0]; if (!o) return true; if (!i) { o.fill(0); return true; } this.dsp.run(i, o, p.pitch[0], p.rate[0], sampleRate); return true; }
+}
+registerProcessor('vc', P);`;
+async function makeProcessor(ctx) {
+  try {
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([workletSrc], { type: 'application/javascript' })));
+    const node = new AudioWorkletNode(ctx, 'vc');
+    return { node, kind: 'worklet', setPitch: (v, r) => { node.parameters.get('rate').setValueAtTime(r, ctx.currentTime); node.parameters.get('pitch').setValueAtTime(v, ctx.currentTime); } };
+  } catch (e) {
+    const dsp = new VoiceDSP(); let target = 0, rate = 1;
+    const node = ctx.createScriptProcessor(1024, 1, 1);
+    node.onaudioprocess = ev => dsp.run(ev.inputBuffer.getChannelData(0), ev.outputBuffer.getChannelData(0), target, rate, ctx.sampleRate);
+    return { node, kind: 'scriptprocessor', setPitch: (v, r) => { target = v; rate = r; } };
+  }
+}
+
+// ---------- graph ----------
+let ctx, stream, src, proc, hpF, lpF, body, shaper, gateG, master, analyser, running = false;
+let voiceIdx = 0, nextAt = 0, timer = null, morphing = false, lastOrder = [];
+const $ = id => document.getElementById(id);
+const status = (t, err) => { $('status').textContent = t; $('status').className = err ? 'err' : ''; };
+for (const [id, fmt] of [['interval', v => v + ' s'], ['morph', v => v + ' s'], ['gain', v => (+v).toFixed(2)], ['gate', v => (+v).toFixed(3)]]) {
+  const el = $(id); const show = () => $(id + 'V').textContent = fmt(el.value); el.addEventListener('input', show); show();
+}
+$('gain').addEventListener('input', () => master && master.gain.setTargetAtTime(+$('gain').value, ctx.currentTime, 0.05));
+function curve(a) { const n = 1024, c = new Float32Array(n), k = a * 60; for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; c[i] = a === 0 ? x : (1 + k) * x / (1 + k * Math.abs(x)); } return c; }
+
+async function openMic() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const aec = $('aec').checked, id = $('inDev').value;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: aec, noiseSuppression: aec, autoGainControl: aec, channelCount: 1 } });
+  if (src) src.disconnect();
+  src = ctx.createMediaStreamSource(stream); src.channelCount = 1; src.channelCountMode = 'explicit';
+  src.connect(proc.node);
+}
+async function start() {
+  try {
+    ctx = new AudioContext({ latencyHint: 'interactive' }); await ctx.resume();
+    proc = await makeProcessor(ctx);
+    hpF = ctx.createBiquadFilter(); hpF.type = 'highpass';
+    lpF = ctx.createBiquadFilter(); lpF.type = 'lowpass';
+    body = ctx.createBiquadFilter(); body.type = 'peaking'; body.Q.value = 1.2;
+    shaper = ctx.createWaveShaper(); shaper.oversample = '2x'; shaper.curve = curve(0);
+    gateG = ctx.createGain(); master = ctx.createGain(); master.gain.value = +$('gain').value;
+    analyser = ctx.createAnalyser(); analyser.fftSize = 512;
+    await openMic();
+    proc.node.connect(hpF); hpF.connect(lpF); lpF.connect(body); body.connect(shaper); shaper.connect(gateG); gateG.connect(master);
+    const mono = ctx.createGain(); mono.channelCount = 1; mono.channelCountMode = 'explicit';
+    const both = ctx.createChannelMerger(2); master.connect(mono); mono.connect(both, 0, 0); mono.connect(both, 0, 1);
+    both.connect(analyser); analyser.connect(ctx.destination);
+    running = true; $('start').textContent = 'Stop'; $('start').classList.add('on');
+    await listDevices();
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {});
+    status('running (' + proc.kind + ')');
+    applyVoice(VOICES[0], 0.5);
+    scheduleNext();
+    tick();
+  } catch (e) { status('could not start: ' + e.message, true); console.error(e); }
+}
+function stop() {
+  running = false; clearTimeout(timer);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) ctx.close(); ctx = null;
+  $('start').textContent = 'Start'; $('start').classList.remove('on'); $('voice').textContent = '—'; $('next').textContent = 'stopped'; $('barfill').style.width = '0';
+  status('stopped');
+}
+$('start').addEventListener('click', () => running ? stop() : start());
+
+// ---------- voice changes: every interval, morph all parameters over `morph` seconds ----------
+function applyVoice(v, secs) {
+  const t = ctx.currentTime;
+  for (const [param, val] of [[hpF.frequency, v.hp], [lpF.frequency, v.lp], [body.frequency, v.bodyHz], [body.gain, v.bodyDb]]) {
+    param.cancelScheduledValues(t); param.setValueAtTime(param.value, t); param.linearRampToValueAtTime(val, t + secs);
+  }
+  const cur = proc.curPitch == null ? 0 : proc.curPitch; proc.curPitch = v.pitch;
+  proc.setPitch(v.pitch, Math.max(0.05, Math.abs(v.pitch - cur) / Math.max(0.5, secs)));   // glide so pitch lands with the tone
+  shaper.curve = curve(v.drive);
+  $('voice').textContent = v.name;
+}
+function pickNext() {
+  if (!$('shuffle').checked) return (voiceIdx + 1) % VOICES.length;
+  let i; do { i = Math.floor(Math.random() * VOICES.length); } while (i === voiceIdx || lastOrder.includes(i));
+  lastOrder.push(i); if (lastOrder.length > 3) lastOrder.shift();
+  return i;
+}
+function scheduleNext() {
+  const iv = +$('interval').value * 1000;
+  nextAt = performance.now() + iv;
+  timer = setTimeout(() => {
+    if (!running) return;
+    voiceIdx = pickNext();
+    applyVoice(VOICES[voiceIdx], +$('morph').value);
+    scheduleNext();
+  }, iv);
+}
+// ---------- gate + meter ----------
+let gateOpen = 0;
+function tick() {
+  if (!running) return;
+  requestAnimationFrame(tick);
+  const buf = new Float32Array(analyser.fftSize); analyser.getFloatTimeDomainData(buf);
+  let rms = 0; for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i]; rms = Math.sqrt(rms / buf.length);
+  // simple gate on the input level (measured post-chain, which is fine for this): opens fast, closes slowly
+  const thr = +$('gate').value;
+  gateOpen = rms > thr ? 1 : Math.max(0, gateOpen - 0.02);
+  gateG.gain.setTargetAtTime(gateOpen > 0 ? 1 : 0, ctx.currentTime, 0.03);
+  $('levelfill').style.width = Math.min(100, rms * 300) + '%';
+  const remain = Math.max(0, nextAt - performance.now()) / 1000, iv = +$('interval').value;
+  $('next').textContent = 'next voice in ' + remain.toFixed(0) + ' s';
+  $('barfill').style.width = (100 * (1 - remain / iv)) + '%';
+}
+async function listDevices() {
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const inSel = $('inDev'), outSel = $('outDev'); const cur = inSel.value; inSel.innerHTML = ''; outSel.innerHTML = '';
+  for (const d of devs) {
+    if (d.kind === 'audioinput') inSel.add(new Option(d.label || 'mic', d.deviceId, false, d.deviceId === cur));
+    if (d.kind === 'audiooutput') outSel.add(new Option(d.label || 'output', d.deviceId));
+  }
+  if (!outSel.options.length) outSel.add(new Option('default', ''));
+  outSel.disabled = !('setSinkId' in AudioContext.prototype);
+}
+$('inDev').addEventListener('change', () => { if (ctx) openMic().catch(e => status(e.message, true)); });
+$('aec').addEventListener('change', () => { if (ctx) openMic().catch(e => status(e.message, true)); });
+$('outDev').addEventListener('change', async e => { if (ctx && ctx.setSinkId) { try { await ctx.setSinkId(e.target.value); status('output → ' + e.target.selectedOptions[0].text); } catch (err) { status(err.message, true); } } });
+</script>
+</body>
+</html>
